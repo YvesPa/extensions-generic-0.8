@@ -1,108 +1,120 @@
 import {
     Chapter,
     ChapterDetails,
-    HomeSection,
     PagedResults,
-    SearchRequest,
     SourceManga,
     TagSection,
     Request,
     Response,
-    SourceStateManager,
-    DUINavigationButton,
-    PartialSourceManga,
     SearchResultsProviding,
-    MangaProviding,
     ChapterProviding,
-    DUISection,
-    Tag,
-    HomePageSectionsProviding,
-    HomeSectionType
+    Extension,
+    SettingsFormProviding,
+    BasicRateLimiter,
+    Form,
+    SearchQuery,
+    SearchResultItem,
+    DiscoverSection,
+    DiscoverSectionType,
+    CloudflareBypassRequestProviding,
+    Cookie,
+    CloudflareError
 } from '@paperback/types'
 
 import { Parser } from './MadaraParser'
 import { URLBuilder } from './MadaraHelper'
 
-const BASE_VERSION = '3.1.3'
-export const getExportVersion = (EXTENSION_VERSION: string): string => {
-    return BASE_VERSION.split('.').map((x, index) => Number(x) + Number(EXTENSION_VERSION.split('.')[index])).join('.')
-}
+import * as cheerio from 'cheerio'
 
-export abstract class Madara implements SearchResultsProviding, MangaProviding, ChapterProviding, HomePageSectionsProviding {
+import { MadaraSettingForm } from './MadaraSettings'
 
-    constructor(public cheerio: CheerioAPI) { }
-
+export abstract class Madara implements Extension, SearchResultsProviding, ChapterProviding, SettingsFormProviding, CloudflareBypassRequestProviding {
+    cheerio = cheerio
     /**
      *  Request manager override
      */
     requestsPerSecond = 5
     requestTimeout = 20000
+    globalRateLimiter = new BasicRateLimiter('rateLimiter', this.requestsPerSecond, 1)
+    filterFail = false
 
-    requestManager = App.createRequestManager({
-        requestsPerSecond: this.requestsPerSecond,
-        requestTimeout: this.requestTimeout,
-        interceptor: {
-            interceptRequest: async (request: Request): Promise<Request> => {
-
-                request.headers = {
-                    ...(request.headers ?? {}),
-                    ...{
-                        'user-agent': await this.requestManager.getDefaultUserAgent(),
-                        'referer': `${this.baseUrl}/`,
-                        'origin': `${this.baseUrl}/`,
-                        ...(request.url.includes('wordpress.com') && { 'Accept': 'image/avif,image/webp,*/*' }) // Used for images hosted on Wordpress blogs
-                    }
-                }
-                request.cookies = [
-                    App.createCookie({ name: 'wpmanga-adault', value: '1', domain: this.baseUrl }),
-                    App.createCookie({ name: 'toonily-mature', value: '1', domain: this.baseUrl })
-                ]
-
-                return request
-            },
-
-            interceptResponse: async (response: Response): Promise<Response> => {
-                return response
-            }
-        }
-    })
-
-
-    stateManager = App.createSourceStateManager()
-
-    async getSourceMenu(): Promise<DUISection> {
-        return App.createDUISection({
-            id: 'sourceMenu',
-            header: 'Source Menu',
-            isHidden: false,
-            rows: async () => [
-                this.sourceSettings(this.stateManager)
-            ]
-        })
+    async initialise(): Promise<void> {
+        this.globalRateLimiter.registerInterceptor()
+        Application.registerInterceptor(
+            'madaraInterceptor',
+            Application.Selector(this as Madara, 'interceptRequest'),
+            Application.Selector(this as Madara, 'interceptResponse')
+        )
+        this.registerDiscoverSections()
+        await this.registerSearchFilters()
     }
 
-    sourceSettings = (stateManager: SourceStateManager): DUINavigationButton => {
-        return App.createDUINavigationButton({
-            id: 'madara_settings',
-            label: 'Source Settings',
-            form: App.createDUIForm({
-                sections: async () => [
-                    App.createDUISection({
-                        id: 'hq_thumb',
-                        isHidden: false,
-                        footer: 'Enabling HQ thumbnails will use more bandwidth and will load thumbnails slightly slower.',
-                        rows: async () => [
-                            App.createDUISwitch({
-                                id: 'HQthumb',
-                                label: 'HQ Thumbnails',
-                                value: App.createDUIBinding({
-                                    get: async () => await stateManager.retrieve('HQthumb') ?? false,
-                                    set: async (newValue) => await stateManager.store('HQthumb', newValue)
-                                })
-                            })
-                        ]
-                    })
-                ]
+    async interceptRequest(request: Request): Promise<Request> {
+        request.headers = {
+            ...(request.headers ?? {}),
+            ...{
+                'user-agent': await Application.getDefaultUserAgent(),
+                'referer': `${this.baseUrl}/`,
+                'origin': `${this.baseUrl}/`,
+                ...(request.url.includes('wordpress.com') && { 'Accept': 'image/avif,image/webp,*/*' }) // Used for images hosted on Wordpress blogs
+            }
+        }
+        
+        request.cookies = {
+            'wpmanga-adault': '1',
+            'toonily-mature': '1'
+        }
+        
+        const cloudflareCookies = Application.getState('cloudflareCookies') as string
+        console.log('Loading cookies: >'+cloudflareCookies+'<')
+        if (cloudflareCookies){
+            (JSON.parse(cloudflareCookies) as Cookie[]).forEach(cookie => {
+                if (request.cookies) request.cookies[cookie.name] = cookie.value
+            })
+        }
+
+        return request
+    }
+
+    async interceptResponse(request: Request, response: Response, data: ArrayBuffer): Promise<ArrayBuffer> {
+        return data
+    }
+
+    async getSettingsForm(): Promise<Form> {
+        return new MadaraSettingForm()
+    }
+
+    async registerSearchFilters(): Promise<void> {
+        let genres: TagSection[]
+        try {
+            genres = await this.getSearchTags()
+            this.filterFail = false
+        } 
+        catch(exception)
+        {
+            this.filterFail = true
+            return
+        }
+
+        Application.registerSearchFilter({
+            id: 'genre_operation',
+            title: 'Genres operation',
+            type: 'dropdown',
+            options: [
+                { id: '', value: 'or' },
+                { id: '1', value: 'and' }
+            ],
+            value: ''
+        })
+
+        genres.forEach(genre => {
+            Application.registerSearchFilter({
+                id: genre.id,
+                title: genre.title,
+                type: 'multiselect',
+                options: genre.tags.map(tag => ({ id: tag.id, value: tag.title })),
+                value: {},
+                allowExclusion: false
             })
         })
     }
@@ -192,21 +204,22 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
     }
 
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const request = App.createRequest({
+        const request = {
             url: this.usePostIds ? `${this.baseUrl}/?p=${mangaId}/` : `${this.baseUrl}/${this.directoryPath}/${mangaId}/`,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseError(response)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        await this.checkResponseError(response, request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
         return this.parser.parseMangaDetails($, mangaId, this)
     }
 
-    async getChapters(mangaId: string): Promise<Chapter[]> {
-        let requestConfig
+    async getChapters(sourceManga: SourceManga): Promise<Chapter[]> {
+        let requestConfig : Request
         let path = this.directoryPath
+        const mangaId = sourceManga.mangaId
         let slug = mangaId
 
         if (this.usePostIds) {
@@ -223,7 +236,7 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
                     headers: {
                         'content-type': 'application/x-www-form-urlencoded'
                     },
-                    data: {
+                    body: {
                         'action': 'manga_get_chapters',
                         'manga': this.usePostIds ? mangaId : await this.convertSlugToPostId(mangaId, this.directoryPath)
                     }
@@ -264,16 +277,18 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
                 throw new Error('Invalid chapter endpoint!')
         }
 
-        const request = App.createRequest(requestConfig)
+        const request = requestConfig
 
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseError(response)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        await this.checkResponseError(response, request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
-        return this.parser.parseChapterList($, mangaId, this)
+        return this.parser.parseChapterList($, sourceManga, this)
     }
 
-    async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
+    async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
+        const mangaId = chapter.sourceManga.mangaId
+        const chapterId = chapter.chapterId
 
         let url: string
         if (this.usePostIds) {
@@ -283,14 +298,14 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
             url = `${this.baseUrl}/${this.directoryPath}/${mangaId}/${chapterId}/${this.useListParameter ? '?style=list' : ''}`
         }
 
-        const request = App.createRequest({
+        const request = {
             url: url,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseError(response)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        await this.checkResponseError(response, request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
         if (this.hasProtectedChapters) {
             return this.parser.parseProtectedChapterDetails($, mangaId, chapterId, this.protectedChapterDataSelector, this)
@@ -303,184 +318,145 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
         let request
         if (this.hasAdvancedSearchPage) {
             // Adding the fake query "the" since some source revert to homepage when none is given!
-            request = App.createRequest({
+            request = {
                 url: `${this.baseUrl}/?s=the&post_type=wp-manga`,
                 method: 'GET'
-            })
+            }
         } else {
-            request = App.createRequest({
+            request = {
                 url: `${this.baseUrl}/`,
                 method: 'GET'
-            })
+            }
         }
 
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseError(response)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        await this.checkResponseError(response, request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
         return this.parser.parseTags($, this.hasAdvancedSearchPage)
     }
 
-    async getSearchResults(query: SearchRequest, metadata: any): Promise<PagedResults> {
+
+
+    async getSearchResults(query: SearchQuery, metadata: any): Promise<PagedResults<SearchResultItem>> {
         // If we're supplied a page that we should be on, set our internal reference to that page. Otherwise, we start from page 0.
         const page = metadata?.page ?? 1
 
         const request = this.constructSearchRequest(page, query)
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseError(response)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        await this.checkResponseError(response, request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
         const results = await this.parser.parseSearchResults($, this)
 
-        const manga: PartialSourceManga[] = []
+        const manga: SearchResultItem[] = []
         for (const result of results) {
             if (this.usePostIds) {
                 const postId = await this.slugToPostId(result.slug, result.path)
 
-                manga.push(App.createPartialSourceManga({
+                manga.push({
                     mangaId: String(postId),
-                    image: result.image,
+                    imageUrl: result.image,
                     title: result.title,
                     subtitle: result.subtitle
-                }))
+                })
             } else {
-                manga.push(App.createPartialSourceManga({
+                manga.push({
                     mangaId: result.slug,
-                    image: result.image,
+                    imageUrl: result.image,
                     title: result.title,
                     subtitle: result.subtitle
-                }))
+                })
             }
         }
 
-        return App.createPagedResults({
-            results: manga,
+        return {
+            items: manga,
             metadata: { page: (page + 1) }
-        })
+        }
     }
 
-    async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
+    sectionsParams : Record<string, {page:number, postsPerPage:number, meta_key: string, meta_value?: string}> = {
+        id_0: {page: 0, postsPerPage: 10, meta_key: '_latest_update'},
+        id_1: {page: 0, postsPerPage: 10, meta_key: '_wp_manga_week_views_value'},
+        id_2: {page: 0, postsPerPage: 10, meta_key: '_wp_manga_views'},
+        id_3: {page: 0, postsPerPage: 10, meta_key: '_wp_manga_status', meta_value: 'end'}
+    }
+    async getDiscoverSectionTitles(section: DiscoverSection, metadata: any): Promise<PagedResults<SearchResultItem>> {
+        const params = this.sectionsParams[section.id]
+        if (!params) throw new Error('Invalid section id!')
+        
+        const page = metadata ? (metadata.page ?? 0 ) : params.page
+        const postsPerPage = metadata ? 50 : params.postsPerPage
+
+        const request = this.constructAjaxHomepageRequest(page, postsPerPage, params.meta_key, params.meta_value)
+
+        const [response, data] = await Application.scheduleRequest(request)
+        await this.checkResponseError(response, request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
+        const results = await this.parser.parseDiscoverSection($, this)
+        return {
+            items: results,
+            metadata: metadata || results.length < 50 ? undefined : { page: (page + 1) }
+        }
+    }
+    
+
+    async registerDiscoverSections(): Promise<void> {
         const sections = [
-            {
-                request: this.constructAjaxHomepageRequest(0, 10, '_latest_update'),
-                section: App.createHomeSection({
-                    id: '0',
-                    title: 'Recently Updated',
-                    type: HomeSectionType.singleRowNormal,
-                    containsMoreItems: true
-                })
+            { 
+                id: 'id_0',
+                title: 'Recently Updated',
+                type: DiscoverSectionType.simpleCarousel
             },
             {
-                request: this.constructAjaxHomepageRequest(0, 10, '_wp_manga_week_views_value'),
-                section: App.createHomeSection({
-                    id: '1',
-                    title: 'Currently Trending',
-                    type: HomeSectionType.singleRowNormal,
-                    containsMoreItems: true
-                })
+                id: 'id_1',
+                title: 'Currently Trending',
+                type: DiscoverSectionType.simpleCarousel
             },
             {
-                request: this.constructAjaxHomepageRequest(0, 10, '_wp_manga_views'),
-                section: App.createHomeSection({
-                    id: '2',
-                    title: 'Most Popular',
-                    type: HomeSectionType.singleRowNormal,
-                    containsMoreItems: true
-                })
+                id: 'id_2',
+                title: 'Most Popular',
+                type: DiscoverSectionType.simpleCarousel
             },
             {
-                request: this.constructAjaxHomepageRequest(0, 10, '_wp_manga_status', 'end'),
-                section: App.createHomeSection({
-                    id: '3',
-                    title: 'Completed',
-                    type: HomeSectionType.singleRowNormal,
-                    containsMoreItems: true
-                })
+                id: 'id_3',
+                title: 'Completed',
+                type: DiscoverSectionType.simpleCarousel
             }
         ]
 
-        const promises: Promise<void>[] = []
         for (const section of sections) {
-            // Let the app load empty sections
-            sectionCallback(section.section)
-
-            // Get the section data
-            promises.push(
-                this.requestManager.schedule(section.request, 1).then(async response => {
-                    this.checkResponseError(response)
-                    const $ = this.cheerio.load(response.data as string)
-                    section.section.items = await this.parser.parseHomeSection($, this)
-                    sectionCallback(section.section)
-                })
-            )
-
+            Application.registerDiscoverSection(section, Application.Selector(this as Madara, 'getDiscoverSectionTitles'))
         }
-
-        // Make sure the function completes
-        await Promise.all(promises)
-    }
-
-    async getViewMoreItems(homepageSectionId: string, metadata: any): Promise<PagedResults> {
-        const page = metadata?.page ?? 0
-        let sortBy: any[] = []
-
-        switch (homepageSectionId) {
-            case '0': {
-                sortBy = ['_latest_update']
-                break
-            }
-            case '1': {
-                sortBy = ['_wp_manga_week_views_value']
-                break
-            }
-            case '2': {
-                sortBy = ['_wp_manga_views']
-                break
-            }
-            case '3': {
-                sortBy = ['_wp_manga_status', 'end']
-                break
-            }
-        }
-
-        const request = this.constructAjaxHomepageRequest(page, 50, sortBy[0], sortBy[1])
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseError(response)
-        const $ = this.cheerio.load(response.data as string)
-        const items: PartialSourceManga[] = await this.parser.parseHomeSection($, this)
-
-        let mData: any = { page: (page + 1) }
-        if (items.length < 50) {
-            mData = undefined
-        }
-
-        return App.createPagedResults({
-            results: items,
-            metadata: mData
-        })
     }
 
     // Utility
-    constructSearchRequest(page: number, query: SearchRequest): any {
-        return App.createRequest({
+    constructSearchRequest(page: number, query: SearchQuery): any {
+        const filterGenre = query?.filters?.find(f => f.id === 'genre')?.value
+        const genre = filterGenre ? Object.keys(filterGenre) : undefined
+        const genre_operation = query?.filters?.find(f => f.id === 'genre_operation')?.value
+
+        return {
             url: new URLBuilder(this.baseUrl)
                 .addPathComponent(this.searchPagePathName)
                 .addPathComponent(page.toString())
                 .addQueryParameter('s', encodeURIComponent(query?.title ?? ''))
                 .addQueryParameter('post_type', 'wp-manga')
-                .addQueryParameter('genre', query?.includedTags?.map((x: Tag) => x.id))
+                .addQueryParameter('genre', genre)
+                .addQueryParameter('op', genre_operation)
                 .buildUrl({ addTrailingSlash: true, includeUndefinedParameters: false }),
             method: 'GET'
-        })
+        }
     }
 
-    constructAjaxHomepageRequest(page: number, postsPerPage: number, meta_key: string, meta_value?: string): any {
-        return App.createRequest({
+    constructAjaxHomepageRequest(page: number, postsPerPage: number, meta_key: string, meta_value?: string): Request {
+        return {
             url: `${this.baseUrl}/wp-admin/admin-ajax.php`,
             method: 'POST',
             headers: {
                 'content-type': 'application/x-www-form-urlencoded'
             },
-            data: {
+            body: {
                 'action': 'madara_load_more',
                 'template': 'madara-core/content/content-archive',
                 'page': page,
@@ -493,36 +469,36 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
                 'vars[meta_key]': meta_key,
                 'vars[meta_value]': meta_value
             }
-        })
+        }
     }
 
     async slugToPostId(slug: string, path: string): Promise<string> {
-        if (await this.stateManager.retrieve(slug) == null) {
+        if (Application.getState(slug) == null) {
             const postId = await this.convertSlugToPostId(slug, path)
 
-            const existingMappedSlug = await this.stateManager.retrieve(postId)
+            const existingMappedSlug = Application.getState(postId) as string
             if (existingMappedSlug != null) {
-                await this.stateManager.store(slug, undefined)
+                Application.setState(undefined, existingMappedSlug)
             }
 
-            await this.stateManager.store(postId, slug)
-            await this.stateManager.store(slug, postId)
+            Application.setState(slug, postId)
+            Application.setState(postId, slug)
         }
 
-        const postId = await this.stateManager.retrieve(slug)
+        const postId = Application.getState(slug) as string
         if (!postId) throw new Error(`Unable to fetch postId for slug:${slug}`)
 
         return postId
     }
 
     async convertPostIdToSlug(postId: number) {
-        const request = App.createRequest({
+        const request = {
             url: `${this.baseUrl}/?p=${postId}`,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
         let parseSlug: any
         // Step 1: Try to get slug from og-url
@@ -548,11 +524,11 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
     }
 
     async convertSlugToPostId(slug: string, path: string): Promise<string> { // Credit to the MadaraDex team :-D
-        const headRequest = App.createRequest({
-            url: `${this.baseUrl}/${path}/${slug}`,
+        const headRequest = {
+            url: `${this.baseUrl}/${path}/${slug}/`,
             method: 'HEAD'
-        })
-        const headResponse = await this.requestManager.schedule(headRequest, 1)
+        }
+        const [headResponse, headData] = await Application.scheduleRequest(headRequest)
 
         let postId: any
 
@@ -564,13 +540,13 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
             postId = ''
         }
 
-        const request = App.createRequest({
-            url: `${this.baseUrl}/${path}/${slug}`,
+        const request = {
+            url: `${this.baseUrl}/${path}/${slug}/`,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [response, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
         // Step 1: Try to get postId from shortlink
         postId = Number($('link[rel="shortlink"]')?.attr('href')?.split('/?p=')[1])
@@ -597,25 +573,33 @@ export abstract class Madara implements SearchResultsProviding, MangaProviding, 
     }
 
     async getCloudflareBypassRequestAsync() {
-        return App.createRequest({
+        return {
             url: this.bypassPage || this.baseUrl,
             method: 'GET',
             headers: {
                 'referer': `${this.baseUrl}/`,
                 'origin': `${this.baseUrl}/`,
-                'user-agent': await this.requestManager.getDefaultUserAgent()
+                'user-agent': await Application.getDefaultUserAgent()
             }
-        })
+        }
     }
 
-    checkResponseError(response: Response): void {
+    async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
+        const cfCookies = cookies.filter(c => c.name.startsWith('cf') || c.name.startsWith('_cf') || c.name.startsWith('__cf'))
+        Application.setState(JSON.stringify(cfCookies), 'cloudflareCookies')
+        if (this.filterFail) {
+            await this.registerSearchFilters()
+        }
+    }
+
+    async checkResponseError(response: Response, request: Request): Promise<void> {
         const status = response.status
         switch (status) {
             case 403:
             case 503:
-                throw new Error(`CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${this.baseUrl}> and press the cloud icon.`)
+                throw new CloudflareError(await this.getCloudflareBypassRequestAsync(),'Cloudflare bypass error, press the red top bar to resolved !')
             case 404:
-                throw new Error(`The requested page ${response.request.url} was not found!`)
+                throw new Error(`The requested page ${request.url} was not found!`)
         }
     }
 }

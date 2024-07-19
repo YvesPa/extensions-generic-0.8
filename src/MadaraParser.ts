@@ -4,7 +4,8 @@ import {
     Tag,
     TagSection,
     SourceManga,
-    PartialSourceManga
+    ContentRating,
+    SearchResultItem
 } from '@paperback/types'
 
 import entities = require('entities')
@@ -14,15 +15,23 @@ import {
     decryptData
 } from './MadaraDecrypter'
 
+import { CheerioAPI } from 'cheerio/lib/load'
+import { Cheerio } from 'cheerio/lib/cheerio'
+import { 
+    Element
+} from 'domhandler/lib/node'
+
+type CheerioElement = Cheerio<Element>;
 
 export class Parser {
-    async parseMangaDetails($: CheerioStatic, mangaId: string, source: any): Promise<SourceManga> {
-        const title: string = this.decodeHTMLEntity($('div.post-title h1, div#manga-title h1').children().remove().end().text().trim())
+    async parseMangaDetails($: CheerioAPI, mangaId: string, source: any): Promise<SourceManga> {
+        const primaryTitle: string = this.decodeHTMLEntity($('div.post-title h1, div#manga-title h1').children().remove().end().text().trim())
+        const secondaryTitles: string[] = []
         const author: string = this.decodeHTMLEntity($('div.author-content').first().text().replace('\\n', '').trim()).replace('Updating', '')
         const artist: string = this.decodeHTMLEntity($('div.artist-content').first().text().replace('\\n', '').trim()).replace('Updating', '')
-        const description: string = this.decodeHTMLEntity($('div.description-summary, div.summary-container').first().text()).replace('Show more', '').trim()
+        const synopsis: string = this.decodeHTMLEntity($('div.description-summary, div.summary-container').first().text()).replace('Show more', '').trim()
 
-        const image: string = encodeURI(await this.getImageSrc($('div.summary_image img').first(), source))
+        const thumbnailUrl: string = encodeURI(await this.getImageSrc($('div.summary_image img').first(), source))
         const parsedStatus: string = $('div.summary-content', $('div.post-content_item').last()).text().trim()
 
         let status: string
@@ -41,35 +50,43 @@ export class Parser {
             const id = $(obj).attr('href')?.split('/')[4] ?? label
 
             if (!label || !id) continue
-            genres.push(App.createTag({ label: label, id: id }))
+            genres.push({ title: label, id: id })
         }
-        const tagSections: TagSection[] = [App.createTagSection({ id: '0', label: 'genres', tags: genres })]
+        const tagGroups: TagSection[] = [{ id: '0', title: 'genres', tags: genres }]
 
-        return App.createSourceManga({
-            id: mangaId,
-            mangaInfo: App.createMangaInfo({
-                titles: [title],
-                image: image,
-                author: author,
-                artist: artist,
-                tags: tagSections,
-                desc: description,
-                status: status
-            })
-        })
+        const contentRating = genres.find(genre => genre.title.toLowerCase() === 'adult' || genre.title.toLocaleLowerCase() === 'hentai') 
+            ? ContentRating.ADULT 
+            : genres.find(genre => genre.title.toLocaleLowerCase() === 'mature') 
+                ? ContentRating.MATURE
+                : ContentRating.EVERYONE
+
+        return {
+            mangaId,
+            mangaInfo: {
+                primaryTitle,
+                secondaryTitles,
+                thumbnailUrl,
+                author,
+                artist,
+                tagGroups,
+                synopsis,
+                status,
+                contentRating
+            }
+        }
     }
 
 
-    parseChapterList($: CheerioSelector, mangaId: string, source: any): Chapter[] {
+    parseChapterList($: CheerioAPI, sourceManga: SourceManga, source: any): Chapter[] {
         const chapters: Chapter[] = []
         let sortingIndex = 0
 
         // For each available chapter..
         for (const obj of $('li.wp-manga-chapter  ').toArray()) {
-            const id = this.idCleaner($('a', obj).first().attr('href') ?? '')
+            const chapterId = this.idCleaner($('a', obj).first().attr('href') ?? '')
 
             const chapName = $('a', obj).first().text().trim() ?? ''
-            const chapNumRegex = id.match(/(?:chapter|ch.*?)(\d+\.?\d?(?:[-_]\d+)?)|(\d+\.?\d?(?:[-_]\d+)?)$/)
+            const chapNumRegex = chapterId.match(/(?:chapter|ch.*?)(\d+\.?\d?(?:[-_]\d+)?)|(\d+\.?\d?(?:[-_]\d+)?)$/)
             let chapNum: string | number = chapNumRegex && chapNumRegex[1] ? chapNumRegex[1].replace(/[-_]/gm, '.') : chapNumRegex?.[2] ?? '0'
 
             // make sure the chapter number is a number and not NaN
@@ -88,52 +105,53 @@ export class Parser {
             // Check if the date is a valid date, else return the current date
             if (!mangaTime.getTime()) mangaTime = new Date()
 
-            if (!id || typeof id === 'undefined') {
-                throw new Error(`Could not parse out ID when getting chapters for postId:${mangaId}`)
+            if (!chapterId || typeof chapterId === 'undefined') {
+                throw new Error(`Could not parse out ID when getting chapters for postId:${sourceManga.mangaId}`)
             }
 
             chapters.push({
-                id: id,
+                chapterId,
+                sourceManga,
                 langCode: source.language,
-                chapNum: chapNum,
-                name: chapName ? this.decodeHTMLEntity(chapName) : '',
-                time: mangaTime,
+                chapNum,
+                title: chapName ? this.decodeHTMLEntity(chapName) : '',
+                publishDate: mangaTime,
                 sortingIndex,
-                volume: 0,
-                group: ''
+                volume: 0
             })
             sortingIndex--
         }
 
         if (chapters.length == 0) {
-            throw new Error(`Couldn't find any chapters for mangaId: ${mangaId}!`)
+            throw new Error(`Couldn't find any chapters for mangaId: ${sourceManga.mangaId}!`)
         }
 
         return chapters.map(chapter => {
-            chapter.sortingIndex += chapters.length
-            return App.createChapter(chapter)
+            
+            chapter.sortingIndex = (chapter.sortingIndex ?? 0) + chapters.length
+            return chapter
         })
     }
 
-    async parseChapterDetails($: CheerioSelector, mangaId: string, chapterId: string, selector: string, source: any): Promise<ChapterDetails> {
+    async parseChapterDetails($: CheerioAPI, mangaId: string, chapterId: string, selector: string, source: any): Promise<ChapterDetails> {
         const pages: string[] = []
 
         for (const obj of $(selector).get()) {
-            const page = await this.getImageSrc($(obj), source)
+            const page = await this.getImageSrc($(obj as Element), source)
             if (!page) {
                 throw new Error(`Could not parse page for postId:${mangaId} chapterId:${chapterId}`)
             }
             pages.push(encodeURI(page))
         }
 
-        return App.createChapterDetails({
+        return {
             id: chapterId,
             mangaId: mangaId,
             pages: pages
-        })
+        }
     }
 
-    async parseProtectedChapterDetails($: CheerioSelector, mangaId: string, chapterId: string, selector: string, source: any): Promise<ChapterDetails> {
+    async parseProtectedChapterDetails($: CheerioAPI, mangaId: string, chapterId: string, selector: string, source: any): Promise<ChapterDetails> {
         if (!$(selector).length) {
             return this.parseChapterDetails($, mangaId, chapterId, selector, source)
         }
@@ -150,32 +168,32 @@ export class Parser {
             pages.push(encodeURI(page))
         })
 
-        return App.createChapterDetails({
+        return {
             id: chapterId,
             mangaId: mangaId,
             pages: pages
-        })
+        }
     }
 
-    parseTags($: CheerioSelector, advancedSearch: boolean): TagSection[] {
+    parseTags($: CheerioAPI, advancedSearch: boolean): TagSection[] {
         const genres: Tag[] = []
         if (advancedSearch) {
             for (const obj of $('.checkbox-group div label').toArray()) {
                 const label = $(obj).text().trim()
                 const id = $(obj).attr('for') ?? label
-                genres.push(App.createTag({ label: label, id: id }))
+                genres.push({ title: label, id: id })
             }
         } else {
             for (const obj of $('.menu-item-object-wp-manga-genre a', $('.second-menu')).toArray()) {
                 const label = $(obj).text().trim()
                 const id = $(obj).attr('href')?.split('/')[4] ?? label
-                genres.push(App.createTag({ label: label, id: id }))
+                genres.push({ title: label, id: id })
             }
         }
-        return [App.createTagSection({ id: '0', label: 'genres', tags: genres })]
+        return [{ id: 'genre', title: 'genres', tags: genres }]
     }
 
-    async parseSearchResults($: CheerioSelector, source: any): Promise<any[]> {
+    async parseSearchResults($: CheerioAPI, source: any): Promise<any[]> {
         const results: any[] = []
 
         for (const obj of $(source.searchMangaSelector).toArray()) {
@@ -201,8 +219,8 @@ export class Parser {
         return results
     }
 
-    async parseHomeSection($: CheerioStatic, source: any): Promise<PartialSourceManga[]> {
-        const items: PartialSourceManga[] = []
+    async parseDiscoverSection($: CheerioAPI, source: any): Promise<SearchResultItem[]> {
+        const items: SearchResultItem[] = []
 
         for (const obj of $('div.page-item-detail').toArray()) {
             const image = encodeURI(await this.getImageSrc($('img', obj), source) ?? '')
@@ -217,12 +235,12 @@ export class Parser {
                 continue
             }
 
-            items.push(App.createPartialSourceManga({
+            items.push({
                 mangaId: String(source.usePostIds ? postId : slug),
-                image: image,
+                imageUrl: image,
                 title: this.decodeHTMLEntity(title),
                 subtitle: this.decodeHTMLEntity(subtitle)
-            }))
+            })
         }
         return items
     }
@@ -232,7 +250,7 @@ export class Parser {
         return entities.decodeHTML(str)
     }
 
-    async getImageSrc(imageObj: Cheerio | undefined, source: any): Promise<string> {
+    async getImageSrc(imageObj: CheerioElement | undefined, source: any): Promise<string> {
         let image: string | undefined
         if ((typeof imageObj?.attr('data-src')) != 'undefined' && imageObj?.attr('data-src') != '') {
             image = imageObj?.attr('data-src')
