@@ -1,46 +1,41 @@
-import { Form } from '@paperback/types'
+import { 
+    Form, 
+    LabelRow, 
+    Section, 
+    ToggleRow
+} from '@paperback/types'
+
+function toBoolean(value: any | undefined): boolean {
+    return (value ?? false) === 'true'
+}
+
+export function getHQthumb(): boolean {
+    return toBoolean(Application.getState('HQthumb'))
+}
+
+export function setHQthumb(value: boolean): void {
+    Application.setState(value.toString(), 'HQthumb')
+}
 
 export class MadaraSettingForm extends Form
 {
     override getSections(): Application.FormSectionElement[] {
-        return []
+        return [
+            Section('Madara Settings', [
+                ToggleRow('hq_thumb', {
+                    title: 'HQ Thumbnails',
+                    value: getHQthumb(),
+                    onValueChange: Application.Selector(this as MadaraSettingForm, 'hQthumbChange')
+                }),
+                LabelRow('label',{
+                    title: '',
+                    subtitle: 'Enabling HQ thumbnails will use more bandwidth and will load thumbnails slightly slower.'
+                })
+            ])
+        ]
     }
 
-    /*
-    return App.createDUISection({
-        id: 'sourceMenu',
-        header: 'Source Menu',
-        isHidden: false,
-        rows: async () => [
-            this.sourceSettings(this.stateManager)
-        ]
-    })
-
-    
-    sourceSettings = (stateManager: SourceStateManager): DUINavigationButton => {
-        return App.createDUINavigationButton({
-            id: 'madara_settings',
-            label: 'Source Settings',
-            form: App.createDUIForm({
-                sections: async () => [
-                    App.createDUISection({
-                        id: 'hq_thumb',
-                        isHidden: false,
-                        footer: 'Enabling HQ thumbnails will use more bandwidth and will load thumbnails slightly slower.',
-                        rows: async () => [
-                            App.createDUISwitch({
-                                id: 'HQthumb',
-                                label: 'HQ Thumbnails',
-                                value: App.createDUIBinding({
-                                    get: async () => await stateManager.retrieve('HQthumb') ?? false,
-                                    set: async (newValue) => await stateManager.store('HQthumb', newValue)
-                                })
-                            })
-                        ]
-                    })
-                ]
-            })
-        })
-    }*/
-
+    async hQthumbChange(value: boolean): Promise<void> {
+        setHQthumb(value)
+    }
 }

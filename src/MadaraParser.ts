@@ -20,6 +20,7 @@ import { Cheerio } from 'cheerio/lib/cheerio'
 import { 
     Element
 } from 'domhandler/lib/node'
+import { getHQthumb } from './MadaraSettings'
 
 type CheerioElement = Cheerio<Element>;
 
@@ -270,14 +271,12 @@ export class Parser {
             image = ''
         }
 
-        if (source?.stateManager) {
-            const HQthumb = await source.stateManager.retrieve('HQthumb') ?? false
-            if (HQthumb) {
-                image = image?.replace('-110x150', '')
-                    .replace('-175x238', '')
-                    .replace('-193x278', '')
-                    .replace('-350x476', '')
-            }
+        const HQthumb = getHQthumb() ?? false
+        if (HQthumb) {
+            image = image?.replace('-110x150', '')
+                .replace('-175x238', '')
+                .replace('-193x278', '')
+                .replace('-350x476', '')
         }
 
         if (image?.startsWith('/')) {
