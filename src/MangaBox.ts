@@ -1,17 +1,19 @@
 import {
+    BasicRateLimiter,
     Chapter,
     ChapterDetails,
     ChapterProviding,
-    DUISection,
-    HomePageSectionsProviding,
-    HomeSection,
-    HomeSectionType,
-    MangaProviding,
+    DiscoverSection,
+    DiscoverSectionType,
+    Extension,
+    Form,
     PagedResults,
     Request,
     Response,
-    SearchRequest,
+    SearchQuery,
+    SearchResultItem,
     SearchResultsProviding,
+    SettingsFormProviding,
     SourceManga,
     TagSection
 } from '@paperback/types'
@@ -21,16 +23,16 @@ import { MangaBoxParser } from './MangaBoxParser'
 import { URLBuilder } from './MangaBoxHelpers'
 
 import {
-    chapterSettings,
-    getImageServer
+    // chapterSettings,
+    getImageServer,
+    MangaBoxSettingForm
 } from './MangaBoxSettings'
 
-const BASE_VERSION = '4.0.1'
-export const getExportVersion = (EXTENSION_VERSION: string): string => {
-    return BASE_VERSION.split('.').map((x, index) => Number(x) + Number(EXTENSION_VERSION.split('.')[index])).join('.')
-}
+import * as cheerio from 'cheerio'
 
-export abstract class MangaBox implements SearchResultsProviding, MangaProviding, ChapterProviding, HomePageSectionsProviding {
+export abstract class MangaBox implements Extension, SearchResultsProviding, ChapterProviding, SettingsFormProviding {
+    cheerio = cheerio
+
     // Website base URL. Eg. https://manganato.com
     abstract baseURL: string
 
@@ -90,172 +92,174 @@ export abstract class MangaBox implements SearchResultsProviding, MangaProviding
     // Selector for manga chapter images.
     chapterImagesSelector = 'div.container-chapter-reader img'
 
-    constructor(public cheerio: CheerioAPI) { }
-
     parser = new MangaBoxParser()
 
-    stateManager = App.createSourceStateManager()
+    /**
+         *  Request manager override
+         */
+    requestsPerSecond = 3
+    requestTimeout = 20000
+    globalRateLimiter = new BasicRateLimiter('rateLimiter', this.requestsPerSecond, 1)
+    filterFail = false
 
-    requestManager = App.createRequestManager({
-        requestsPerSecond: 3,
-        requestTimeout: 20000,
-        interceptor: {
-            interceptRequest: async (request: Request): Promise<Request> => {
-                request.headers = {
-                    ...(request.headers ?? {}),
-                    ...{
-                        'referer': `${this.baseURL}/`,
-                        'user-agent': await this.requestManager.getDefaultUserAgent()
-                    }
-                }
-                return request
-            },
-            interceptResponse: async (response: Response): Promise<Response> => {
-                return response
+    async initialise(): Promise<void> {
+        this.globalRateLimiter.registerInterceptor()
+        Application.registerInterceptor(
+            'madaraInterceptor',
+            Application.Selector(this as MangaBox, 'interceptRequest'),
+            Application.Selector(this as MangaBox, 'interceptResponse')
+        )
+        this.registerDiscoverSections()
+        await this.registerSearchFilters()
+    }
+
+    async interceptRequest(request: Request): Promise<Request> {
+        request.headers = {
+            ...(request.headers ?? {}),
+            ...{
+                'referer': `${this.baseURL}/`,
+                'user-agent': await Application.getDefaultUserAgent()
             }
         }
-    })
+        return request
+        
+        /*
+        const cloudflareCookies = Application.getState('cloudflareCookies') as string
+        console.log('Loading cookies: >'+cloudflareCookies+'<')
+        if (cloudflareCookies){
+            (JSON.parse(cloudflareCookies) as Cookie[]).forEach(cookie => {
+                if (request.cookies) request.cookies[cookie.name] = cookie.value
+            })
+        }
 
-    async getSourceMenu(): Promise<DUISection> {
-        return App.createDUISection({
-            id: 'main',
-            header: 'Source Settings',
-            isHidden: false,
-            rows: async () => [chapterSettings(this.stateManager)]
+        return request*/
+    }
+
+    async interceptResponse(request: Request, response: Response, data: ArrayBuffer): Promise<ArrayBuffer> {
+        return data
+    }
+
+    async getSettingsForm(): Promise<Form> {
+        return new MangaBoxSettingForm()
+    }
+
+    async registerSearchFilters(): Promise<void> {
+        let genres: TagSection[]
+        try {
+            genres = await this.getSearchTags()
+            this.filterFail = false
+        } 
+        catch(exception)
+        {
+            this.filterFail = true
+            return
+        }
+
+        Application.registerSearchFilter({
+            id: 'genre_operation',
+            title: 'Genres operation',
+            type: 'dropdown',
+            options: [
+                { id: '', value: 'or' },
+                { id: '1', value: 'and' }
+            ],
+            value: ''
+        })
+
+        genres.forEach(genre => {
+            Application.registerSearchFilter({
+                id: genre.id,
+                title: genre.title,
+                type: 'multiselect',
+                options: genre.tags.map(tag => ({ id: tag.id, value: tag.title })),
+                value: {},
+                allowExclusion: true
+            })
         })
     }
 
-    getMangaShareUrl(mangaId: string): string { return `${mangaId}` }
-
-    async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
-        const sections = [
-            {
-                request: App.createRequest({
-                    url: new URLBuilder(this.baseURL)
-                        .addPathComponent(this.mangaListPath)
-                        .addQueryParameter('type', 'latest')
-                        .buildUrl(),
-                    method: 'GET'
-                }),
-                section: App.createHomeSection({
-                    id: 'latest',
-                    title: 'Latest Updates',
-                    type: HomeSectionType.singleRowLarge,
-                    containsMoreItems: true
-                })
+    async registerDiscoverSections(): Promise<void> {
+        const sections2 = [
+            { 
+                id: 'latest',
+                title: 'Latest Updates',
+                type: DiscoverSectionType.simpleCarousel
             },
             {
-                request: App.createRequest({
-                    url: new URLBuilder(this.baseURL)
-                        .addPathComponent(this.mangaListPath)
-                        .addQueryParameter('type', 'newest')
-                        .buildUrl(),
-                    method: 'GET'
-                }),
-                section: App.createHomeSection({
-                    id: 'newest',
-                    title: 'New Titles',
-                    type: HomeSectionType.singleRowNormal,
-                    containsMoreItems: true
-                })
+                id: 'newest',
+                title: 'New Titles',
+                type: DiscoverSectionType.simpleCarousel
             },
             {
-                request: App.createRequest({
-                    url: new URLBuilder(this.baseURL)
-                        .addPathComponent(this.mangaListPath)
-                        .addQueryParameter('type', 'topview')
-                        .buildUrl(),
-                    method: 'GET'
-                }),
-                section: App.createHomeSection({
-                    id: 'topview',
-                    title: 'Most Popular',
-                    type: HomeSectionType.singleRowNormal,
-                    containsMoreItems: true
-                })
+                id: 'id_2',
+                title: 'Most Popular',
+                type: DiscoverSectionType.simpleCarousel
             }
         ]
 
-        const promises: Promise<void>[] = []
-
-        for (const section of sections) {
-            sectionCallback(section.section)
-            promises.push(
-                this.requestManager.schedule(section.request, 1)
-                    .then(response => {
-                        const $ = this.cheerio.load(response.data as string)
-                        const items = this.parser.parseManga($, this)
-                        section.section.items = items
-                        sectionCallback(section.section)
-                    })
-            )
+        for (const section of sections2) {
+            Application.registerDiscoverSection(section, Application.Selector(this as MangaBox, 'getDiscoverSectionTitles'))
         }
     }
 
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const request = App.createRequest({
+        const request = {
             url: `${mangaId}`,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
         return this.parser.parseMangaDetails($, mangaId, this)
     }
 
-    async getChapters(mangaId: string): Promise<Chapter[]> {
-        const request = App.createRequest({
-            url: `${mangaId}`,
+    async getChapters(sourceManga: SourceManga): Promise<Chapter[]> {
+        const request = {
+            url: `${sourceManga.mangaId}`,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
-        return this.parser.parseChapters($, mangaId, this)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
+        return this.parser.parseChapters($, sourceManga, this)
     }
 
-    async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-        const cookieDomainRegex = chapterId.match(/(.*.com\/).*$/g)
-        const cookieDomain = cookieDomainRegex ? cookieDomainRegex[0] : this.baseURL
-        const imageServer = await getImageServer(this.stateManager).then(value => value[0])
+    async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
+        const imageServer = getImageServer()
 
-        const request = App.createRequest({
-            url: `${chapterId}`,
+        const request = {
+            url: `${chapter.chapterId}`,
             method: 'GET',
-            cookies: [
-                App.createCookie({
-                    name: 'content_server',
-                    value: imageServer ?? 'server1',
-                    domain: cookieDomain
-                })
-            ]
-        })
+            cookies:{
+                content_server : imageServer ?? 'server1'
+            }
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
-        return this.parser.parseChapterDetails($, mangaId, chapterId, this)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
+        return this.parser.parseChapterDetails($, chapter, this)
     }
 
-    async getViewMoreItems(homePageSectionId: string, metadata: any): Promise<PagedResults> {
+    async getDiscoverSectionTitles(section: DiscoverSection, metadata: any): Promise<PagedResults<SearchResultItem>> {
         const page: number = metadata?.page ?? 1
 
-        const request = App.createRequest({
+        const request = {
             url: new URLBuilder(this.baseURL)
                 .addPathComponent(`${this.mangaListPath}/${page}`)
-                .addQueryParameter('type', homePageSectionId)
+                .addQueryParameter('type', section.id)
                 .buildUrl(),
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
         const results = this.parser.parseManga($, this)
 
         metadata = !this.parser.isLastPage($) ? { page: page + 1 } : undefined
-        return App.createPagedResults({
-            results: results,
+        return {
+            items: results,
             metadata: metadata
-        })
+        }
     }
 
     async supportsTagExclusion(): Promise<boolean> {
@@ -263,40 +267,41 @@ export abstract class MangaBox implements SearchResultsProviding, MangaProviding
     }
 
     async getSearchTags(): Promise<TagSection[]> {
-        const request = App.createRequest({
+        const request = {
             url: new URLBuilder(this.baseURL)
                 .addPathComponent('advanced_search')
                 .buildUrl(),
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
         return this.parser.parseTags($, this)
     }
 
-    async getSearchResults(query: SearchRequest, metadata: any): Promise<PagedResults> {
+    async getSearchResults(query: SearchQuery, metadata: any): Promise<PagedResults<SearchResultItem>> {
         const page: number = metadata?.page ?? 1
 
-        const request = App.createRequest({
+        const request = {
             url: new URLBuilder(this.baseURL)
                 .addPathComponent('advanced_search')
                 .addQueryParameter('keyw', query.title?.replace(/[^a-zA-Z0-9 ]/g, '').replace(/ +/g, '_').toLowerCase() ?? '')
-                .addQueryParameter('g_i', `_${query.includedTags?.map(t => t.id).join('_')}_`)
-                .addQueryParameter('g_e', `_${query.excludedTags?.map(t => t.id).join('_')}_`)
+                // TODO
+                //.addQueryParameter('g_i', `_${query.includedTags?.map(t => t.id).join('_')}_`)
+                //.addQueryParameter('g_e', `_${query.excludedTags?.map(t => t.id).join('_')}_`)
                 .addQueryParameter('page', page)
                 .buildUrl(),
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
         const results = this.parser.parseManga($, this)
 
         metadata = !this.parser.isLastPage($) ? { page: page + 1 } : undefined
-        return App.createPagedResults({
-            results: results,
+        return {
+            items: results,
             metadata: metadata
-        })
+        }
     }
 }

@@ -1,19 +1,18 @@
 {
-  "name": "extensions-generic-0.8",
-  "version": "0.8.0",
-  "repositoryName": "MangaBox Generic (0.8)",
-  "description": "MangaBox Generic for 0.8!",
+  "name": "extensions-generic-0.9",
+  "version": "0.9.0",
+  "repositoryName": "MangaBox Generic (0.9)",
+  "description": "MangaBox Generic for 0.9!",
   "main": "index.js",
   "scripts": {
-    "bundle": "paperback bundle",
-    "serve": "paperback serve",
-    "test": "paperback test"
+    "bundle": "npx paperback-cli bundle",
+    "serve": "npx paperback-cli serve",
+    "test": "npx paperback-cli test"
   },
   "author": "Netsky",
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@tsconfig/recommended": "^1.0.1",
-    "@types/cheerio": "^0.22.21",
     "@typescript-eslint/eslint-plugin": "^5.1.0",
     "@typescript-eslint/parser": "^5.57.1",
     "eslint": "^7.27.0",
@@ -21,11 +20,11 @@
     "typescript": "^4.9.5"
   },
   "dependencies": {
-    "@paperback/toolchain": "^0.8.0-alpha.47",
-    "@paperback/types": "^0.8.0-alpha.47",
+    "@paperback/toolchain": "^1.0.0-alpha.20",
+    "@paperback/types": "^1.0.0-alpha.20",
     "cheerio": "^1.0.0-rc.12",
     "entities": "^4.4.0",
     "nodemon": "^2.0.22",
-    "ts-node": "^10.2.1"
+    "ts-node": "^10.9.2"
   }
 }

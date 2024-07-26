@@ -1,7 +1,8 @@
 import {
     Chapter,
     ChapterDetails,
-    PartialSourceManga,
+    ContentRating,
+    SearchResultItem,
     SourceManga,
     Tag,
     TagSection
@@ -9,11 +10,15 @@ import {
 
 import { decodeHTML } from 'entities'
 
+import { CheerioAPI } from 'cheerio/lib/load'
+import { Cheerio } from 'cheerio/lib/cheerio'
+import { Element } from 'domhandler/lib/node'
+
 import { MangaBox } from './MangaBox'
 
 export class MangaBoxParser {
-    parseManga = ($: CheerioStatic, source: MangaBox): PartialSourceManga[] => {
-        const mangaItems: PartialSourceManga[] = []
+    parseManga = ($: CheerioAPI, source: MangaBox): SearchResultItem[] => {
+        const mangaItems: SearchResultItem[] = []
         const collecedIds: string[] = []
 
         for (const manga of $(source.mangaListSelector).toArray()) {
@@ -23,32 +28,32 @@ export class MangaBoxParser {
             const subtitle = $(source.mangaSubtitleSelector, manga).first().text().trim() ?? ''
 
             if (!mangaId || !title || collecedIds.includes(mangaId)) continue
-            mangaItems.push(App.createPartialSourceManga({
+            mangaItems.push({
                 mangaId: mangaId,
-                image: image,
+                imageUrl: image,
                 title: title,
                 subtitle: subtitle ? subtitle : 'No Chapters'
-            }))
+            })
             collecedIds.push(mangaId)
         }
 
         return mangaItems
     }
 
-    parseMangaDetails = ($: CheerioStatic, mangaId: string, source: MangaBox): SourceManga => {
+    parseMangaDetails = ($: CheerioAPI, mangaId: string, source: MangaBox): SourceManga => {
         const mangaRootSelector = $(source.mangaRootSelector)
 
-        const image = $(source.mangaThumbnailSelector).attr('src') ?? ''
+        const thumbnailUrl = $(source.mangaThumbnailSelector).attr('src') ?? ''
 
-        const titles = []
-        titles.push(decodeHTML($(source.mangaTitleSelector, mangaRootSelector).text().trim()))
-
+        const primaryTitle = decodeHTML($(source.mangaTitleSelector, mangaRootSelector).text().trim())
+        
+        const secondaryTitles = []
         // Alternative Titles
         for (const altTitle of $(source.mangaAltTitleSelector, mangaRootSelector)
             .text()
             ?.split(/,|;|\//)) {
             if (altTitle == '') continue
-            titles.push(decodeHTML(altTitle.trim()))
+            secondaryTitles.push(decodeHTML(altTitle.trim()))
         }
 
         const rawStatus = $(source.mangaStatusSelector, mangaRootSelector).text().trim() ?? 'ONGOING'
@@ -70,39 +75,44 @@ export class MangaBoxParser {
             .map(x => $(x).text().trim())
             .join(', ') ?? ''
 
-        const desc = decodeHTML($(source.mangaDescSelector).first().children().remove().end().text().trim())
+        const synopsis = decodeHTML($(source.mangaDescSelector).first().children().remove().end().text().trim())
 
         const tags: Tag[] = []
         for (const tag of $(source.mangaGenresSelector, mangaRootSelector).toArray()) {
             const id = $(tag).attr('href')
-            const label = $(tag).text().trim()
+            const title = $(tag).text().trim()
 
-            if (!id || !label) continue
-            tags.push({ id: id, label: label })
+            if (!id || !title) continue
+            tags.push({ id: id, title: title })
         }
-        const TagSection: TagSection[] = [
-            App.createTagSection({
+        const tagGroups: TagSection[] = [
+            {
                 id: '0',
-                label: 'genres',
-                tags: tags.map(t => App.createTag(t))
-            })
+                title: 'genres',
+                tags: tags
+            }
         ]
 
-        return App.createSourceManga({
-            id: mangaId,
-            mangaInfo: App.createMangaInfo({
-                image: image,
-                titles: titles,
-                status: status,
-                author: author ? author : 'Unkown',
-                desc: desc,
-                tags: TagSection
-            })
-        })
+        //TODO
+        const contentRating = ContentRating.EVERYONE
+        
+        return {
+            mangaId,
+            mangaInfo: {
+                primaryTitle,
+                secondaryTitles,
+                thumbnailUrl,
+                author,
+                tagGroups,
+                synopsis,
+                status,
+                contentRating
+            }
+        }
     }
 
-    parseChapters = ($: CheerioStatic, mangaId: string, source: MangaBox): Chapter[] => {
-        const chapters: Chapter[] = []
+    parseChapters = ($: CheerioAPI, sourceManga: SourceManga, source: MangaBox): Chapter[] => {
+        const chapters: (Chapter & {sortingIndex: number}) [] = []
         let sortingIndex = 0
 
         for (const chapter of $(source.chapterListSelector).toArray()) {
@@ -117,13 +127,13 @@ export class MangaBoxParser {
             if (chapRegex && chapRegex[1]) chapNum = Number(chapRegex[1].replace(/\\/g, '.'))
 
             chapters.push({
-                id: id,
-                chapNum: isNaN(chapNum) ? 0 : chapNum,
-                volume: 0,
-                name: name,
-                group: '',
-                time: time,
+                chapterId: id,
+                sourceManga: sourceManga,
                 langCode: source.languageCode,
+                chapNum: isNaN(chapNum) ? 0 : chapNum,
+                title: name,
+                volume: 0,
+                publishDate: time,
                 sortingIndex: sortingIndex
             })
             sortingIndex--
@@ -131,49 +141,49 @@ export class MangaBoxParser {
 
         // If there are no chapters, throw error to avoid losing progress
         if (chapters.length == 0) {
-            throw new Error(`Couldn't find any chapters for mangaId: ${mangaId}!`)
+            throw new Error(`Couldn't find any chapters for mangaId: ${sourceManga.mangaId}!`)
         }
 
         return chapters.map((chapter) => {
             chapter.sortingIndex += chapters.length
-            return App.createChapter(chapter)
+            return chapter
         })
     }
 
-    parseChapterDetails = async ($: CheerioStatic, mangaId: string, chapterId: string, source: MangaBox): Promise<ChapterDetails> => {
+    parseChapterDetails = async ($: CheerioAPI, chapter: Chapter, source: MangaBox): Promise<ChapterDetails> => {
         const pages: string[] = []
 
         for (const img of $(source.chapterImagesSelector).toArray()) {
             let image = $(img).attr('src') ?? ''
             if (!image) image = $(img).attr('data-src') ?? ''
-            if (!image) throw new Error(`Unable to parse image(s) for Chapter ID: ${chapterId}`)
+            if (!image) throw new Error(`Unable to parse image(s) for Chapter ID: ${chapter.chapterId}`)
             pages.push(image)
         }
 
-        const chapterDetails = App.createChapterDetails({
-            id: chapterId,
-            mangaId: mangaId,
+        const chapterDetails = {
+            id: chapter.chapterId,
+            mangaId: chapter.sourceManga.mangaId,
             pages: pages
-        })
+        }
 
         return chapterDetails
     }
 
-    parseTags = ($: CheerioStatic, source: MangaBox): TagSection[] => {
+    parseTags = ($: CheerioAPI, source: MangaBox): TagSection[] => {
         const genres: Tag[] = []
         for (const genre of $(source.genreListSelector).toArray()) {
             const id = $(genre).attr('data-i')
-            const label = $(genre).text().trim()
-            if (!id || !label) continue
-            genres.push({ id: id, label: label })
+            const title = $(genre).text().trim()
+            if (!id || !title) continue
+            genres.push({ id: id, title: title })
         }
 
         const TagSection: TagSection[] = [
-            App.createTagSection({
+            {
                 id: '0',
-                label: 'genres',
-                tags: genres.map(t => App.createTag(t))
-            })
+                title: 'genres',
+                tags: genres
+            }
         ]
         return TagSection
     }
@@ -198,7 +208,7 @@ export class MangaBoxParser {
         return time
     }
 
-    isLastPage = ($: CheerioStatic): boolean => {
+    isLastPage = ($: CheerioAPI): boolean => {
         const currentPage = $('.page-select, .page_select').text()
         let totalPages = $('.page-last, .page_last').text()
 

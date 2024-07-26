@@ -1,37 +1,38 @@
-import {
-    DUINavigationButton,
-    SourceStateManager
+import { 
+    Form, 
+    Section, 
+    SelectRow 
 } from '@paperback/types'
 
-export const getImageServer = async (stateManager: SourceStateManager): Promise<string> => {
-    return ((await stateManager.retrieve('imageServer')) as string) ?? 'server1'
+export function getImageServer(): string {
+    return (Application.getState('imageServer') as string) ?? 'server1'
 }
 
-export const chapterSettings = (stateManager: SourceStateManager): DUINavigationButton => {
-    return App.createDUINavigationButton({
-        id: 'chapter_settings',
-        label: 'Chapter Settings',
-        form: App.createDUIForm({
-            sections: async () => [
-                App.createDUISection({
-                    id: 'image_server_settings',
-                    header: 'Image Server Settings',
-                    isHidden: false,
-                    rows: async () => [
-                        App.createDUISelect({
-                            id: 'imageServer',
-                            label: 'Image Server',
-                            options: ['server1', 'server2'],
-                            value: App.createDUIBinding({
-                                get: () => getImageServer(stateManager).then(value => [value[0]]),
-                                set: async (newValue) => await stateManager.store('imageServer', newValue)
-                            }),
-                            allowsMultiselect: false,
-                            labelResolver: async (value: string) => (value == 'server1' ? 'Server 1' : 'Server 2')
-                        })
-                    ]
+export function setImageServer(value: string | undefined): void {
+    Application.setState(value ?? 'server1', 'imageServer')
+}
+
+export class MangaBoxSettingForm extends Form
+{
+    override getSections(): Application.FormSectionElement[] {
+        return [
+            Section('Madara Settings', [
+                SelectRow('imageServer', {
+                    title: 'Image Server',
+                    minItemCount: 1,
+                    maxItemCount: 1,
+                    value: [getImageServer()],
+                    options: [
+                        { id: 'server1', title: 'Server 1' },
+                        { id: 'server2', title: 'Server 2' }
+                    ],
+                    onValueChange: Application.Selector(this as MangaBoxSettingForm, 'setImageServerChange')
                 })
-            ]
-        })
-    })
+            ])
+        ]
+    }
+
+    async setImageServerChange(value: string[]): Promise<void> {
+        setImageServer(value[0])
+    }
 }

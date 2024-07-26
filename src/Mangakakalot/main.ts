@@ -1,42 +1,17 @@
-/* eslint-disable @typescript-eslint/explicit-module-boundary-types, @typescript-eslint/no-explicit-any */
-
-import {
-    BadgeColor,
-    ContentRating,
-    PagedResults,
-    PartialSourceManga,
-    SearchRequest,
-    SourceInfo,
-    SourceIntents,
-    Tag,
-    TagSection
+import { 
+    DiscoverSection, 
+    PagedResults, 
+    SearchQuery, 
+    SearchResultItem, 
+    Tag, 
+    TagSection 
 } from '@paperback/types'
-
 import { decodeHTML } from 'entities'
-
-import {
-    MangaBox,
-    getExportVersion
-} from '../MangaBox'
-
+import { MangaBox } from '../MangaBox'
 import { URLBuilder } from '../MangaBoxHelpers'
+import { SITE_DOMAIN } from './pbconfig'
 
-const SITE_DOMAIN = 'https://mangakakalot.com'
-
-export const MangakakalotInfo: SourceInfo = {
-    version: getExportVersion('0.0.3'),
-    name: 'Mangakakalot',
-    icon: 'icon.png',
-    author: 'Batmeow',
-    authorWebsite: 'https://github.com/Batmeow',
-    description: `Extension that pulls manga from ${SITE_DOMAIN}.`,
-    contentRating: ContentRating.MATURE,
-    websiteBaseURL: SITE_DOMAIN,
-    sourceTags: [],
-    intents: SourceIntents.SETTINGS_UI | SourceIntents.HOMEPAGE_SECTIONS | SourceIntents.MANGA_CHAPTERS
-}
-
-export class Mangakakalot extends MangaBox {
+class MangakakalotSource extends MangaBox {
     // Website base URL.
     baseURL = SITE_DOMAIN
 
@@ -56,50 +31,52 @@ export class Mangakakalot extends MangaBox {
         return false
     }
 
-    override async getViewMoreItems(homePageSectionId: string, metadata: any): Promise<PagedResults> {
+    override async getDiscoverSectionTitles(section: DiscoverSection, metadata: any): Promise<PagedResults<SearchResultItem>> {
         const page: number = metadata?.page ?? 1
 
-        const request = App.createRequest({
+        const request = {
             url: new URLBuilder(this.baseURL)
                 .addPathComponent(this.mangaListPath)
-                .addQueryParameter('type', homePageSectionId)
+                .addQueryParameter('type', section.id)
                 .addQueryParameter('page', page)
                 .buildUrl(),
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
         const results = this.parser.parseManga($, this)
 
         metadata = !this.parser.isLastPage($) ? { page: page + 1 } : undefined
-        return App.createPagedResults({
-            results: results,
+        return {
+            items: results,
             metadata: metadata
-        })
+        }
     }
 
-    override async getSearchResults(query: SearchRequest, metadata: any): Promise<PagedResults> {
+    override async getSearchResults(query: SearchQuery, metadata: any): Promise<PagedResults<SearchResultItem>> {
         const page: number = metadata?.page ?? 1
-        let results: PartialSourceManga[] = []
+        let results: SearchResultItem[] = []
 
+        //TODO 
         if (query.includedTags && query.includedTags?.length != 0) {
-            const request = App.createRequest({
+            const request = {
                 url: new URLBuilder(this.baseURL)
                     .addPathComponent('manga_list')
-                    .addQueryParameter('category', query.includedTags[0]?.id)
+                    //TODO
+                    //.addQueryParameter('category', query.includedTags[0]?.id)
                     .addQueryParameter('page', page)
                     .buildUrl(),
                 method: 'GET'
-            })
+            }
 
-            const response = await this.requestManager.schedule(request, 1)
-            const $ = this.cheerio.load(response.data as string)
+            const [, data] = await Application.scheduleRequest(request)
+            const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
             results = this.parser.parseManga($, this)
             metadata = !this.parser.isLastPage($) ? { page: page + 1 } : undefined
         } else {
-            const request = App.createRequest({
+            const request = {
                 url: new URLBuilder(this.baseURL)
                     .addPathComponent('search')
                     .addPathComponent('story')
@@ -107,10 +84,10 @@ export class Mangakakalot extends MangaBox {
                     .addQueryParameter('page', page)
                     .buildUrl(),
                 method: 'GET'
-            })
+            }
 
-            const response = await this.requestManager.schedule(request, 1)
-            const $ = this.cheerio.load(response.data as string)
+            const [, data] = await Application.scheduleRequest(request)
+            const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
             const collecedIds: string[] = []
 
@@ -121,21 +98,21 @@ export class Mangakakalot extends MangaBox {
                 const subtitle = decodeHTML($('h3.story_name + em.story_chapter a', manga).text().trim() ?? '')
 
                 if (!mangaId || !title || collecedIds.includes(mangaId)) continue
-                results.push(App.createPartialSourceManga({
+                results.push({
                     mangaId: mangaId,
-                    image: image,
+                    imageUrl: image,
                     title: title,
                     subtitle: subtitle ? subtitle : 'No Chapters'
-                }))
+                })
                 collecedIds.push(mangaId)
             }
             metadata = !this.parser.isLastPage($) ? { page: page + 1 } : undefined
         }
 
-        return App.createPagedResults({
-            results: results,
+        return {
+            items: results,
             metadata: metadata
-        })
+        }
     }
     /* eslint-enable @typescript-eslint/explicit-module-boundary-types, @typescript-eslint/no-explicit-any */
 
@@ -144,30 +121,34 @@ export class Mangakakalot extends MangaBox {
     }
 
     override async getSearchTags(): Promise<TagSection[]> {
-        const request = App.createRequest({
+        const request = {
             url: this.baseURL,
             method: 'GET'
-        })
+        }
 
-        const response = await this.requestManager.schedule(request, 1)
-        const $ = this.cheerio.load(response.data as string)
+        const [, data] = await Application.scheduleRequest(request)
+        const $ = this.cheerio.load(Application.arrayBufferToUTF8String(data))
 
         const tags: Tag[] = []
 
         for (const tag of $('div.panel-category tbody a').toArray()) {
             const id = this.parseTagId($(tag).attr('href') ?? '')
-            const label = $(tag).text().trim()
-            if (!id || !label) continue
-            tags.push({ id: id, label: label })
+            const title = $(tag).text().trim()
+            if (!id || !title) continue
+            tags.push({ id: id, title: title })
         }
 
         const TagSection: TagSection[] = [
-            App.createTagSection({
+            {
                 id: '0',
-                label: 'genres',
-                tags: tags.map(t => App.createTag(t))
-            })
+                title: 'genres',
+                tags: tags
+            }
         ]
         return TagSection
     }
 }
+
+
+export const Mangakakalot = new MangakakalotSource()
+
