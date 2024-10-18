@@ -10496,6 +10496,7 @@ var source = (() => {
   var entities = require_lib2();
   var Parser = class {
     constructor() {
+      this.chapterListNameSelector = "a";
       this.parseDate = (date) => {
         date = date.toUpperCase();
         let time;
@@ -10571,7 +10572,7 @@ var source = (() => {
       let sortingIndex = 0;
       for (const obj of $2("li.wp-manga-chapter  ").toArray()) {
         const chapterId = this.idCleaner($2("a", obj).first().attr("href") ?? "");
-        const chapName = $2("a", obj).first().text().trim() ?? "";
+        const chapName = $2(this.chapterListNameSelector, obj).first().text().trim() ?? "";
         const chapNumRegex = chapterId.match(/(?:chapter|ch.*?)(\d+\.?\d?(?:[-_]\d+)?)|(\d+\.?\d?(?:[-_]\d+)?)$/);
         let chapNum = chapNumRegex && chapNumRegex[1] ? chapNumRegex[1].replace(/[-_]/gm, ".") : chapNumRegex?.[2] ?? "0";
         chapNum = parseFloat(chapNum) ?? 0;
@@ -24842,6 +24843,28 @@ var source = (() => {
         id_2: { page: 0, postsPerPage: 10, meta_key: "_wp_manga_views" },
         id_3: { page: 0, postsPerPage: 10, meta_key: "_wp_manga_status", meta_value: "end" }
       };
+      this.sections = [
+        {
+          id: "id_0",
+          title: "Recently Updated",
+          type: import_types4.DiscoverSectionType.simpleCarousel
+        },
+        {
+          id: "id_1",
+          title: "Currently Trending",
+          type: import_types4.DiscoverSectionType.simpleCarousel
+        },
+        {
+          id: "id_2",
+          title: "Most Popular",
+          type: import_types4.DiscoverSectionType.simpleCarousel
+        },
+        {
+          id: "id_3",
+          title: "Completed",
+          type: import_types4.DiscoverSectionType.simpleCarousel
+        }
+      ];
     }
     async initialise() {
       this.globalRateLimiter.registerInterceptor();
@@ -25075,29 +25098,7 @@ var source = (() => {
       };
     }
     async registerDiscoverSections() {
-      const sections = [
-        {
-          id: "id_0",
-          title: "Recently Updated",
-          type: import_types4.DiscoverSectionType.simpleCarousel
-        },
-        {
-          id: "id_1",
-          title: "Currently Trending",
-          type: import_types4.DiscoverSectionType.simpleCarousel
-        },
-        {
-          id: "id_2",
-          title: "Most Popular",
-          type: import_types4.DiscoverSectionType.simpleCarousel
-        },
-        {
-          id: "id_3",
-          title: "Completed",
-          type: import_types4.DiscoverSectionType.simpleCarousel
-        }
-      ];
-      for (const section of sections) {
+      for (const section of this.sections) {
         Application.registerDiscoverSection(section, Application.Selector(this, "getDiscoverSectionTitles"));
       }
     }

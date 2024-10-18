@@ -1,0 +1,1 @@
+{"icon":"icon.png","name":"KnightNoScanlation","version":"0.9.0","description":"Extension that pulls manga from https://lectorkns.com","contentRating":"MATURE","developers":[{"name":"Netsky","github":"https://github.com/TheNetsky"}],"badges":[{"label":"Spanish","backgroundColor":"#808080","textColor":"#FFFFFF"}],"capabilities":[1,4,32,64,16],"id":"KnightNoScanlation"}
