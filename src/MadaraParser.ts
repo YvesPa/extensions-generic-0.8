@@ -17,9 +17,7 @@ import {
 
 import { CheerioAPI } from 'cheerio/lib/load'
 import { Cheerio } from 'cheerio/lib/cheerio'
-import { 
-    Element
-} from 'domhandler/lib/node'
+import { Element } from 'domhandler/lib/node'
 import { getHQthumb } from './MadaraSettings'
 
 type CheerioElement = Cheerio<Element>;
