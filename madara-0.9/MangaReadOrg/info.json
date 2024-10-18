@@ -1,0 +1,1 @@
+{"icon":"icon.png","name":"MangaReadOrg","version":"0.9.0","description":"Extension that pulls manga from https://www.mangaread.org","contentRating":"SAFE","developers":[{"name":"Yves Pa","github":"https://github.com/YvesPa"},{"name":"Netsky","github":"https://github.com/TheNetsky"}],"badges":[],"capabilities":[1,4,32,64],"id":"MangaReadOrg"}
