@@ -400,32 +400,30 @@ export abstract class Madara implements Extension, SearchResultsProviding, Chapt
         }
     }
     
-
+    sections = [
+        { 
+            id: 'id_0',
+            title: 'Recently Updated',
+            type: DiscoverSectionType.simpleCarousel
+        },
+        {
+            id: 'id_1',
+            title: 'Currently Trending',
+            type: DiscoverSectionType.simpleCarousel
+        },
+        {
+            id: 'id_2',
+            title: 'Most Popular',
+            type: DiscoverSectionType.simpleCarousel
+        },
+        {
+            id: 'id_3',
+            title: 'Completed',
+            type: DiscoverSectionType.simpleCarousel
+        }
+    ]
     async registerDiscoverSections(): Promise<void> {
-        const sections = [
-            { 
-                id: 'id_0',
-                title: 'Recently Updated',
-                type: DiscoverSectionType.simpleCarousel
-            },
-            {
-                id: 'id_1',
-                title: 'Currently Trending',
-                type: DiscoverSectionType.simpleCarousel
-            },
-            {
-                id: 'id_2',
-                title: 'Most Popular',
-                type: DiscoverSectionType.simpleCarousel
-            },
-            {
-                id: 'id_3',
-                title: 'Completed',
-                type: DiscoverSectionType.simpleCarousel
-            }
-        ]
-
-        for (const section of sections) {
+        for (const section of this.sections) {
             Application.registerDiscoverSection(section, Application.Selector(this as Madara, 'getDiscoverSectionTitles'))
         }
     }

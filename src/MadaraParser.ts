@@ -75,7 +75,7 @@ export class Parser {
         }
     }
 
-
+    chapterListNameSelector = 'a'
     parseChapterList($: CheerioAPI, sourceManga: SourceManga, source: any): Chapter[] {
         const chapters: Chapter[] = []
         let sortingIndex = 0
@@ -84,7 +84,7 @@ export class Parser {
         for (const obj of $('li.wp-manga-chapter  ').toArray()) {
             const chapterId = this.idCleaner($('a', obj).first().attr('href') ?? '')
 
-            const chapName = $('a', obj).first().text().trim() ?? ''
+            const chapName = $(this.chapterListNameSelector, obj).first().text().trim() ?? ''
             const chapNumRegex = chapterId.match(/(?:chapter|ch.*?)(\d+\.?\d?(?:[-_]\d+)?)|(\d+\.?\d?(?:[-_]\d+)?)$/)
             let chapNum: string | number = chapNumRegex && chapNumRegex[1] ? chapNumRegex[1].replace(/[-_]/gm, '.') : chapNumRegex?.[2] ?? '0'
 
