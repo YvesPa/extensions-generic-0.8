@@ -4,7 +4,7 @@ import {
 } from '@paperback/types'
 import { getExportVersion } from '../MadaraConfig'
 
-export const DOMAIN = 'https://hiperdex.top'
+export const DOMAIN = 'https://hipertoon.com'
 
 export default {
     icon: 'icon.png',
