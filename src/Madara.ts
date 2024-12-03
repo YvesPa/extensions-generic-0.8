@@ -18,7 +18,9 @@ import {
     DiscoverSectionType,
     CloudflareBypassRequestProviding,
     Cookie,
-    CloudflareError
+    CloudflareError,
+    DiscoverSectionProviding,
+    DiscoverSectionItem
 } from '@paperback/types'
 
 import { Parser } from './MadaraParser'
@@ -28,14 +30,14 @@ import * as cheerio from 'cheerio'
 
 import { MadaraSettingForm } from './MadaraSettings'
 
-export abstract class Madara implements Extension, SearchResultsProviding, ChapterProviding, SettingsFormProviding, CloudflareBypassRequestProviding {
+export abstract class Madara implements Extension, SearchResultsProviding, ChapterProviding, SettingsFormProviding, CloudflareBypassRequestProviding, DiscoverSectionProviding {
     cheerio = cheerio
     /**
      *  Request manager override
      */
     requestsPerSecond = 5
     requestTimeout = 20000
-    globalRateLimiter = new BasicRateLimiter('rateLimiter', this.requestsPerSecond, 1)
+    globalRateLimiter = new BasicRateLimiter('rateLimiter', {numberOfRequests: 10,  bufferInterval: 1, ignoreImages: false})
     filterFail = false
 
     async initialise(): Promise<void> {
@@ -45,7 +47,6 @@ export abstract class Madara implements Extension, SearchResultsProviding, Chapt
             Application.Selector(this as Madara, 'interceptRequest'),
             Application.Selector(this as Madara, 'interceptResponse')
         )
-        this.registerDiscoverSections()
         await this.registerSearchFilters()
     }
 
@@ -114,7 +115,9 @@ export abstract class Madara implements Extension, SearchResultsProviding, Chapt
                 type: 'multiselect',
                 options: genre.tags.map(tag => ({ id: tag.id, value: tag.title })),
                 value: {},
-                allowExclusion: false
+                allowExclusion: false,
+                allowEmptySelection: true,
+                maximum: undefined
             })
         })
     }
@@ -422,9 +425,16 @@ export abstract class Madara implements Extension, SearchResultsProviding, Chapt
             type: DiscoverSectionType.simpleCarousel
         }
     ]
-    async registerDiscoverSections(): Promise<void> {
-        for (const section of this.sections) {
-            Application.registerDiscoverSection(section, Application.Selector(this as Madara, 'getDiscoverSectionTitles'))
+    
+    getDiscoverSections(): Promise<DiscoverSection[]> {
+        return Promise.resolve(this.sections)
+    }
+    
+    async getDiscoverSectionItems(section: DiscoverSection, metadata: unknown | undefined): Promise<PagedResults<DiscoverSectionItem>>{
+        const result = await this.getDiscoverSectionTitles(section, metadata)
+        return {
+            items: result.items.map(item => ({ type: 'simpleCarouselItem', ...item })),
+            metadata: result.metadata
         }
     }
 
